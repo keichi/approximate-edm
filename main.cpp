@@ -2,10 +2,14 @@
 #include <cassert>
 #include <iostream>
 #include <random>
-#include <unordered_set>
+#include <set>
 #include <vector>
 
-const size_t N = 1000;
+#include <omp.h>
+
+#include "timer.hpp"
+
+const size_t N = 100000;
 const size_t K = 10;
 const float DELTA = 0.001f;
 
@@ -22,7 +26,7 @@ struct Neighbor {
 
 struct NeighborList {
     std::vector<Neighbor> nodes;
-    std::unordered_set<size_t> ids;
+    std::set<size_t> ids;
 };
 
 using NNGraph = std::vector<NeighborList>;
@@ -40,10 +44,12 @@ float sigma(const std::vector<float> &u, const std::vector<float> &v)
     return sum;
 }
 
-bool update_nns(NeighborList &nns, float l, size_t u)
+bool update_nns(NeighborList &nns, float l, size_t u, omp_lock_t *lock)
 {
     if (l >= nns.nodes.front().distance) return false;
     if (nns.ids.find(u) != nns.ids.end()) return false;
+
+    omp_set_lock(lock);
 
     nns.ids.erase(nns.nodes.front().id);
     nns.ids.insert(u);
@@ -52,30 +58,69 @@ bool update_nns(NeighborList &nns, float l, size_t u)
     nns.nodes.back() = Neighbor{u, l, true};
     std::push_heap(nns.nodes.begin(), nns.nodes.end());
 
-    return true;
+    omp_unset_lock(lock);
+
+   return true;
 }
 
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
-    while (true) {
-        std::vector<std::unordered_set<size_t>> old_nns(N), new_nns(N);
+    std::vector<omp_lock_t> locks(nng.size());
 
+    for (auto &lock : locks) {
+        omp_init_lock(&lock);
+    }
+
+    std::vector<std::set<size_t>> old_nns(nng.size()), new_nns(nng.size());
+
+
+    Timer ttot;
+
+    ttot.start();
+
+    while (true) {
+        Timer t1, t2;
+
+        t1.start();
+
+#pragma omp parallel for
+        for (size_t v = 0; v < nng.size(); v++) {
+            new_nns[v].clear();
+            old_nns[v].clear();
+        }
+
+#pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             for (auto &node : nng[v].nodes) {
                 if (node.updated) {
+                    omp_set_lock(&locks[v]);
                     new_nns[v].insert(node.id);
+                    omp_unset_lock(&locks[v]);
+
+                    omp_set_lock(&locks[node.id]);
                     new_nns[node.id].insert(v);
+                    omp_unset_lock(&locks[node.id]);
                 } else {
+                    omp_set_lock(&locks[v]);
                     old_nns[v].insert(node.id);
+                    omp_unset_lock(&locks[v]);
+
+                    omp_set_lock(&locks[node.id]);
                     old_nns[node.id].insert(v);
+                    omp_unset_lock(&locks[node.id]);
                 }
 
                 node.updated = false;
             }
         }
 
+        t1.stop();
+
+        t2.start();
+
         auto c = 0;
 
+#pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             for (const auto u1 : new_nns[v]) {
                 for (const auto u2 : new_nns[v]) {
@@ -83,8 +128,8 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
                     const auto l = sigma(data[u1], data[u2]);
 
-                    if (update_nns(nng[u1], l, u2)) c++;
-                    if (update_nns(nng[u2], l, u1)) c++;
+                    if (update_nns(nng[u1], l, u2, &locks[u1])) c++;
+                    if (update_nns(nng[u2], l, u1, &locks[u2])) c++;
                 }
 
                 for (const auto u2 : old_nns[v]) {
@@ -92,13 +137,27 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
                     const auto l = sigma(data[u1], data[u2]);
 
-                    if (update_nns(nng[u1], l, u2)) c++;
-                    if (update_nns(nng[u2], l, u1)) c++;
+                    if (update_nns(nng[u1], l, u2, &locks[u1])) c++;
+                    if (update_nns(nng[u2], l, u1, &locks[u2])) c++;
                 }
             }
         }
 
+        t2.stop();
+
+        std::cerr << c << std::endl;
+        std::cerr << "phase 1: " << t1.elapsed() << " [ms] " << std::endl;
+        std::cerr << "phase 2: " << t2.elapsed() << " [ms]" << std::endl;
+
         if (c <= DELTA * N * K) break;
+    }
+
+    ttot.stop();
+
+    std::cerr << "total: " << ttot.elapsed() << " [ms]" << std::endl;
+
+    for (auto &lock : locks) {
+        omp_destroy_lock(&lock);
     }
 }
 
@@ -126,21 +185,21 @@ int main()
 
     nn_descent(data, nng);
 
-    std::cout << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-                 "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
-              << std::endl;
+    // std::cout << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+    //              "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+    //           << std::endl;
 
-    for (size_t i = 0; i < N; i++) {
-        std::cout << "<circle cx=\"" << (data[i][0] * 500) << "\" cy=\""
-                  << (data[i][1] * 500) << "\" r=\"3\" />" << std::endl;
+    // for (size_t i = 0; i < N; i++) {
+    //     std::cout << "<circle cx=\"" << (data[i][0] * 500) << "\" cy=\""
+    //               << (data[i][1] * 500) << "\" r=\"3\" />" << std::endl;
 
-        for (const auto id : nng[i].ids) {
-            std::cout << "<line x1=\"" << (data[i][0] * 500) << "\" y1=\""
-                      << (data[i][1] * 500) << "\" x2=\"" << (data[id][0] * 500)
-                      << "\" y2=\"" << (data[id][1] * 500)
-                      << "\" stroke=\"black\" />" << std::endl;
-        }
-    }
+    //     for (const auto id : nng[i].ids) {
+    //         std::cout << "<line x1=\"" << (data[i][0] * 500) << "\" y1=\""
+    //                   << (data[i][1] * 500) << "\" x2=\"" << (data[id][0] * 500)
+    //                   << "\" y2=\"" << (data[id][1] * 500)
+    //                   << "\" stroke=\"black\" />" << std::endl;
+    //     }
+    // }
 
-    std::cout << "</svg>" << std::endl;
+    // std::cout << "</svg>" << std::endl;
 }
