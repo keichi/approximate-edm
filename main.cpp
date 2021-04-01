@@ -72,13 +72,12 @@ bool update_nns(NeighborList &nns, float l, size_t u, pthread_rwlock_t *lock)
 
     pthread_rwlock_unlock(lock);
 
-   return true;
+    return true;
 }
 
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
     std::vector<pthread_rwlock_t> locks(nng.size(), PTHREAD_RWLOCK_INITIALIZER);
-
     std::vector<std::unordered_set<size_t>> old_nns(nng.size()), new_nns(nng.size());
 
     Timer ttot;
@@ -90,13 +89,13 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         t1.start();
 
-#pragma omp parallel for
+        #pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             new_nns[v].clear();
             old_nns[v].clear();
         }
 
-#pragma omp parallel for
+        #pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             for (auto &node : nng[v].nodes) {
                 if (node.updated) {
@@ -127,7 +126,7 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         auto c = 0;
 
-#pragma omp parallel for
+        #pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             for (const auto u1 : new_nns[v]) {
                 for (const auto u2 : new_nns[v]) {
@@ -136,11 +135,11 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
                     const auto l = sigma(data[u1], data[u2]);
 
                     if (update_nns(nng[u1], l, u2, &locks[u1])) {
-#pragma omp atomic update
+                        #pragma omp atomic update
                         c++;
                     }
                     if (update_nns(nng[u2], l, u1, &locks[u2])) {
-#pragma omp atomic update
+                        #pragma omp atomic update
                         c++;
                     }
                 }
@@ -151,11 +150,11 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
                     const auto l = sigma(data[u1], data[u2]);
 
                     if (update_nns(nng[u1], l, u2, &locks[u1])) {
-#pragma omp atomic update
+                        #pragma omp atomic update
                         c++;
                     }
                     if (update_nns(nng[u2], l, u1, &locks[u2])) {
-#pragma omp atomic update
+                        #pragma omp atomic update
                         c++;
                     }
                 }
