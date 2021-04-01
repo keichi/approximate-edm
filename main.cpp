@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <omp.h>
+#include <pthread.h>
 
 #include "timer.hpp"
 
@@ -44,19 +45,23 @@ float sigma(const std::vector<float> &u, const std::vector<float> &v)
     return sum;
 }
 
-bool update_nns(NeighborList &nns, float l, size_t u, omp_lock_t *lock)
+bool update_nns(NeighborList &nns, float l, size_t u, pthread_rwlock_t *lock)
 {
-    omp_set_lock(lock);
+    pthread_rwlock_rdlock(lock);
 
     if (l >= nns.nodes.front().distance) {
-        omp_unset_lock(lock);
+        pthread_rwlock_unlock(lock);
         return false;
     }
 
     if (nns.ids.find(u) != nns.ids.end()) {
-        omp_unset_lock(lock);
+        pthread_rwlock_unlock(lock);
         return false;
     }
+
+    pthread_rwlock_unlock(lock);
+
+    pthread_rwlock_wrlock(lock);
 
     nns.ids.erase(nns.nodes.front().id);
     nns.ids.insert(u);
@@ -65,18 +70,14 @@ bool update_nns(NeighborList &nns, float l, size_t u, omp_lock_t *lock)
     nns.nodes.back() = Neighbor{u, l, true};
     std::push_heap(nns.nodes.begin(), nns.nodes.end());
 
-    omp_unset_lock(lock);
+    pthread_rwlock_unlock(lock);
 
    return true;
 }
 
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
-    std::vector<omp_lock_t> locks(nng.size());
-
-    for (auto &lock : locks) {
-        omp_init_lock(&lock);
-    }
+    std::vector<pthread_rwlock_t> locks(nng.size(), PTHREAD_RWLOCK_INITIALIZER);
 
     std::vector<std::unordered_set<size_t>> old_nns(nng.size()), new_nns(nng.size());
 
@@ -99,21 +100,21 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
         for (size_t v = 0; v < nng.size(); v++) {
             for (auto &node : nng[v].nodes) {
                 if (node.updated) {
-                    omp_set_lock(&locks[v]);
+                    pthread_rwlock_wrlock(&locks[v]);
                     new_nns[v].insert(node.id);
-                    omp_unset_lock(&locks[v]);
+                    pthread_rwlock_unlock(&locks[v]);
 
-                    omp_set_lock(&locks[node.id]);
+                    pthread_rwlock_wrlock(&locks[node.id]);
                     new_nns[node.id].insert(v);
-                    omp_unset_lock(&locks[node.id]);
+                    pthread_rwlock_unlock(&locks[node.id]);
                 } else {
-                    omp_set_lock(&locks[v]);
+                    pthread_rwlock_wrlock(&locks[v]);
                     old_nns[v].insert(node.id);
-                    omp_unset_lock(&locks[v]);
+                    pthread_rwlock_unlock(&locks[v]);
 
-                    omp_set_lock(&locks[node.id]);
+                    pthread_rwlock_wrlock(&locks[node.id]);
                     old_nns[node.id].insert(v);
-                    omp_unset_lock(&locks[node.id]);
+                    pthread_rwlock_unlock(&locks[node.id]);
                 }
 
                 node.updated = false;
@@ -175,7 +176,7 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
     std::cerr << "total: " << ttot.elapsed() << " [ms]" << std::endl;
 
     for (auto &lock : locks) {
-        omp_destroy_lock(&lock);
+        pthread_rwlock_destroy(&lock);
     }
 }
 
