@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <unordered_set>
 #include <vector>
@@ -179,6 +180,46 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
     }
 }
 
+void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
+{
+    std::vector<float> distances(data.size());
+    std::vector<size_t> indices(data.size());
+
+    size_t tp = 0;
+
+    for (size_t i = 0; i < data.size(); i++) {
+        std::fill(distances.begin(), distances.end(), 0.0f);
+        std::iota(indices.begin(), indices.end(), 0);
+
+        distances[i] = std::numeric_limits<float>::max();
+
+        for (size_t j = 0; j < data.size(); j++) {
+            for (size_t k = 0; k < data[j].size(); k++) {
+                float diff = data[i][k] - data[j][k];
+                distances[j] += diff * diff;
+            }
+        }
+
+        std::partial_sort(
+            indices.begin(), indices.begin() + K, indices.end(),
+            [&](size_t a, size_t b) { return distances[a] < distances[b]; });
+
+        std::unordered_set<size_t> set;
+        for (size_t k = 0; k < K; k++) {
+            set.insert(nng[i].nodes[k].id);
+        }
+
+        for (size_t k = 0; k < K; k++) {
+            if (set.find(indices[k]) != set.end()) {
+                tp++;
+            }
+        }
+    }
+
+    std::cout << "Recall: " << (static_cast<float>(tp) / (K * data.size()))
+              << std::endl;
+}
+
 int main()
 {
     // std::random_device rand_dev;
@@ -203,6 +244,7 @@ int main()
     }
 
     nn_descent(data, nng);
+    eval_nng(data, nng);
 
     // std::cout << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
                  // "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
