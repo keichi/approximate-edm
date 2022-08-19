@@ -80,7 +80,8 @@ bool update_nns(NeighborList &nns, float l, size_t u, pthread_rwlock_t *lock)
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
     std::vector<pthread_rwlock_t> locks(nng.size(), PTHREAD_RWLOCK_INITIALIZER);
-    std::vector<std::unordered_set<size_t>> old_nns(nng.size()), new_nns(nng.size());
+    std::vector<std::unordered_set<size_t>> old_nns(nng.size()),
+        new_nns(nng.size());
 
     Timer ttot;
 
@@ -91,13 +92,13 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         t1.start();
 
-        #pragma omp parallel for
+#pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             new_nns[v].clear();
             old_nns[v].clear();
         }
 
-        #pragma omp parallel for
+#pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             for (auto &node : nng[v].nodes) {
                 if (node.updated) {
@@ -128,37 +129,55 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         auto c = 0;
 
-        #pragma omp parallel for
+#pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
             for (const auto u1 : new_nns[v]) {
+                float min_dist = std::numeric_limits<float>::max();
+                size_t min_id = 0;
+
                 for (const auto u2 : new_nns[v]) {
                     if (u1 >= u2) continue;
 
-                    const auto l = sigma(data[u1], data[u2]);
+                    float dist = sigma(data[u1], data[u2]);
 
-                    if (update_nns(nng[u1], l, u2, &locks[u1])) {
-                        #pragma omp atomic update
-                        c++;
-                    }
-                    if (update_nns(nng[u2], l, u1, &locks[u2])) {
-                        #pragma omp atomic update
-                        c++;
+                    if (dist < min_dist) {
+                        min_dist = dist;
+                        min_id = u2;
                     }
                 }
+
+                if (update_nns(nng[u1], min_dist, min_id, &locks[u1])) {
+#pragma omp atomic update
+                    c++;
+                }
+                if (update_nns(nng[min_id], min_dist, u1, &locks[min_id])) {
+#pragma omp atomic update
+                    c++;
+                }
+            }
+
+            for (const auto u1 : new_nns[v]) {
+                float min_dist = std::numeric_limits<float>::max();
+                size_t min_id = 0;
 
                 for (const auto u2 : old_nns[v]) {
                     if (u1 == u2) continue;
 
-                    const auto l = sigma(data[u1], data[u2]);
+                    float dist = sigma(data[u1], data[u2]);
 
-                    if (update_nns(nng[u1], l, u2, &locks[u1])) {
-                        #pragma omp atomic update
-                        c++;
+                    if (dist < min_dist) {
+                        min_dist = dist;
+                        min_id = u2;
                     }
-                    if (update_nns(nng[u2], l, u1, &locks[u2])) {
-                        #pragma omp atomic update
-                        c++;
-                    }
+                }
+
+                if (update_nns(nng[u1], min_dist, min_id, &locks[u1])) {
+#pragma omp atomic update
+                    c++;
+                }
+                if (update_nns(nng[min_id], min_dist, u1, &locks[min_id])) {
+#pragma omp atomic update
+                    c++;
                 }
             }
         }
@@ -249,19 +268,18 @@ int main()
     eval_nng(data, nng);
 
     // std::cout << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-                 // "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
-              // << std::endl;
+    // "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+    // << std::endl;
 
     // for (size_t i = 0; i < N; i++) {
-        // std::cout << "<circle cx=\"" << (data[i][0] * 500) << "\" cy=\""
-                  // << (data[i][1] * 500) << "\" r=\"3\" />" << std::endl;
+    // std::cout << "<circle cx=\"" << (data[i][0] * 500) << "\" cy=\""
+    // << (data[i][1] * 500) << "\" r=\"3\" />" << std::endl;
 
-        // for (const auto id : nng[i].ids) {
-            // std::cout << "<line x1=\"" << (data[i][0] * 500) << "\" y1=\""
-                      // << (data[i][1] * 500) << "\" x2=\"" << (data[id][0] * 500)
-                      // << "\" y2=\"" << (data[id][1] * 500)
-                      // << "\" stroke=\"black\" />" << std::endl;
-        // }
+    // for (const auto id : nng[i].ids) {
+    // std::cout << "<line x1=\"" << (data[i][0] * 500) << "\" y1=\""
+    // << (data[i][1] * 500) << "\" x2=\"" << (data[id][0] * 500)
+    // << "\" y2=\"" << (data[id][1] * 500)
+    // << "\" stroke=\"black\" />" << std::endl;
     // }
 
     // std::cout << "</svg>" << std::endl;
