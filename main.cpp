@@ -83,14 +83,15 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
     std::vector<std::unordered_set<size_t>> old_nns(nng.size()),
         new_nns(nng.size());
 
-    Timer ttot;
+    Timer timer_total, timer_phase1_total, timer_phase2_total;
 
-    ttot.start();
+    timer_total.start();
 
     for (int iter = 0;; iter++) {
-        Timer t1, t2;
+        Timer timer_phase1, timer_phase2;
 
-        t1.start();
+        timer_phase1_total.start();
+        timer_phase1.start();
 
 #pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
@@ -123,9 +124,11 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
             }
         }
 
-        t1.stop();
+        timer_phase1.stop();
+        timer_phase1_total.stop();
 
-        t2.start();
+        timer_phase2_total.start();
+        timer_phase2.start();
 
         auto c = 0;
 
@@ -182,19 +185,24 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
             }
         }
 
-        t2.stop();
+        timer_phase2.stop();
+        timer_phase2_total.stop();
 
         std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
                   << std::endl;
-        std::cerr << "\tPhase 1: " << t1.elapsed() << " [ms], "
-                  << "Phase 2: " << t2.elapsed() << " [ms]" << std::endl;
+        std::cerr << "\tPhase 1: " << timer_phase1.elapsed() << " [ms], "
+                  << "Phase 2: " << timer_phase2.elapsed() << " [ms]"
+                  << std::endl;
 
         if (c <= DELTA * N * K) break;
     }
 
-    ttot.stop();
+    timer_total.stop();
 
-    std::cerr << "Total: " << ttot.elapsed() << " [ms]" << std::endl;
+    std::cerr << "Total: " << timer_total.elapsed() << " [ms]" << std::endl;
+    std::cerr << "\tPhase 1: " << timer_phase1_total.elapsed() << " [ms], "
+              << "Phase 2: " << timer_phase2_total.elapsed() << " [ms]"
+              << std::endl;
 
     for (auto &lock : locks) {
         pthread_rwlock_destroy(&lock);
@@ -265,7 +273,7 @@ int main()
     }
 
     nn_descent(data, nng);
-    eval_nng(data, nng);
+    // eval_nng(data, nng);
 
     // std::cout << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
     // "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
@@ -280,6 +288,7 @@ int main()
     // << (data[i][1] * 500) << "\" x2=\"" << (data[id][0] * 500)
     // << "\" y2=\"" << (data[id][1] * 500)
     // << "\" stroke=\"black\" />" << std::endl;
+    // }
     // }
 
     // std::cout << "</svg>" << std::endl;
