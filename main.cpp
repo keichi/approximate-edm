@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <random>
@@ -85,7 +86,7 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
     ttot.start();
 
-    while (true) {
+    for (int iter = 0;; iter++) {
         Timer t1, t2;
 
         t1.start();
@@ -164,16 +165,17 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         t2.stop();
 
-        std::cerr << c << std::endl;
-        std::cerr << "phase 1: " << t1.elapsed() << " [ms] " << std::endl;
-        std::cerr << "phase 2: " << t2.elapsed() << " [ms]" << std::endl;
+        std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
+                  << std::endl;
+        std::cerr << "\tPhase 1: " << t1.elapsed() << " [ms], "
+                  << "Phase 2: " << t2.elapsed() << " [ms]" << std::endl;
 
         if (c <= DELTA * N * K) break;
     }
 
     ttot.stop();
 
-    std::cerr << "total: " << ttot.elapsed() << " [ms]" << std::endl;
+    std::cerr << "Total: " << ttot.elapsed() << " [ms]" << std::endl;
 
     for (auto &lock : locks) {
         pthread_rwlock_destroy(&lock);
@@ -216,8 +218,8 @@ void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
         }
     }
 
-    std::cout << "Recall: " << (static_cast<float>(tp) / (K * data.size()))
-              << std::endl;
+    std::cerr << "Recall: " << std::fixed << std::setprecision(3)
+              << (static_cast<float>(tp) / (K * data.size())) << std::endl;
 }
 
 int main()
