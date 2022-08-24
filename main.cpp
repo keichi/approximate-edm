@@ -147,41 +147,47 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 #pragma omp for
             for (size_t v = 0; v < nng.size(); v++) {
                 for (const auto u1 : new_nns[v]) {
-                    float min_dist = std::numeric_limits<float>::max();
-                    size_t min_id = 0;
+                    // float min_dist = std::numeric_limits<float>::max();
+                    // size_t min_id = 0;
 
                     for (const auto u2 : new_nns[v]) {
                         if (u1 >= u2) continue;
 
                         float dist = sigma(data[u1], data[u2]);
 
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_id = u2;
-                        }
+                        local_nng[tid].insert_neighbor(u1, dist, u2);
+                        local_nng[tid].insert_neighbor(u2, dist, u1);
+
+                        // if (dist < min_dist) {
+                            // min_dist = dist;
+                            // min_id = u2;
+                        // }
                     }
 
-                    local_nng[tid].insert_neighbor(u1, min_dist, min_id);
-                    local_nng[tid].insert_neighbor(min_id, min_dist, u1);
+                    // local_nng[tid].insert_neighbor(u1, min_dist, min_id);
+                    // local_nng[tid].insert_neighbor(min_id, min_dist, u1);
                 }
 
                 for (const auto u1 : new_nns[v]) {
-                    float min_dist = std::numeric_limits<float>::max();
-                    size_t min_id = 0;
+                    // float min_dist = std::numeric_limits<float>::max();
+                    // size_t min_id = 0;
 
                     for (const auto u2 : old_nns[v]) {
                         if (u1 == u2) continue;
 
                         float dist = sigma(data[u1], data[u2]);
 
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_id = u2;
-                        }
+                        local_nng[tid].insert_neighbor(u1, dist, u2);
+                        local_nng[tid].insert_neighbor(u2, dist, u1);
+
+                        // if (dist < min_dist) {
+                            // min_dist = dist;
+                            // min_id = u2;
+                        // }
                     }
 
-                    local_nng[tid].insert_neighbor(u1, min_dist, min_id);
-                    local_nng[tid].insert_neighbor(min_id, min_dist, u1);
+                    // local_nng[tid].insert_neighbor(u1, min_dist, min_id);
+                    // local_nng[tid].insert_neighbor(min_id, min_dist, u1);
                 }
             }
         }
