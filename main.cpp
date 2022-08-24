@@ -1,3 +1,5 @@
+// g++ -Wall -fopenmp -O3 -g main.cpp -ltbb
+
 #include <algorithm>
 #include <cassert>
 #include <iomanip>
@@ -9,6 +11,7 @@
 
 #include <omp.h>
 #include <pthread.h>
+#include <tbb/concurrent_unordered_set.h>
 
 #include "timer.hpp"
 
@@ -75,7 +78,7 @@ bool update_nns(NeighborList &nns, float l, size_t u, pthread_rwlock_t *lock)
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
     std::vector<pthread_rwlock_t> locks(nng.size(), PTHREAD_RWLOCK_INITIALIZER);
-    std::vector<std::unordered_set<size_t>> old_nns(nng.size()),
+    std::vector<tbb::concurrent_unordered_set<size_t>> old_nns(nng.size()),
         new_nns(nng.size());
 
     Timer timer_total, timer_phase1_total, timer_phase2_total;
@@ -98,21 +101,11 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
         for (size_t v = 0; v < nng.size(); v++) {
             for (auto &node : nng[v]) {
                 if (node.updated) {
-                    pthread_rwlock_wrlock(&locks[v]);
                     new_nns[v].insert(node.id);
-                    pthread_rwlock_unlock(&locks[v]);
-
-                    pthread_rwlock_wrlock(&locks[node.id]);
                     new_nns[node.id].insert(v);
-                    pthread_rwlock_unlock(&locks[node.id]);
                 } else {
-                    pthread_rwlock_wrlock(&locks[v]);
                     old_nns[v].insert(node.id);
-                    pthread_rwlock_unlock(&locks[v]);
-
-                    pthread_rwlock_wrlock(&locks[node.id]);
                     old_nns[node.id].insert(v);
-                    pthread_rwlock_unlock(&locks[node.id]);
                 }
 
                 node.updated = false;
