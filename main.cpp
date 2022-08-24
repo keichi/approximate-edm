@@ -27,11 +27,7 @@ struct Neighbor {
     }
 };
 
-struct NeighborList {
-    std::vector<Neighbor> nodes;
-    std::unordered_set<size_t> ids;
-};
-
+using NeighborList = std::vector<Neighbor>;
 using NNGraph = std::vector<NeighborList>;
 
 float sigma(const std::vector<float> &u, const std::vector<float> &v)
@@ -51,26 +47,25 @@ bool update_nns(NeighborList &nns, float l, size_t u, pthread_rwlock_t *lock)
 {
     pthread_rwlock_rdlock(lock);
 
-    if (l >= nns.nodes.front().distance) {
+    if (l >= nns.front().distance) {
         pthread_rwlock_unlock(lock);
         return false;
     }
 
-    if (nns.ids.find(u) != nns.ids.end()) {
-        pthread_rwlock_unlock(lock);
-        return false;
+    for (const auto &v : nns) {
+        if (u == v.id) {
+            pthread_rwlock_unlock(lock);
+            return false;
+        }
     }
 
     pthread_rwlock_unlock(lock);
 
     pthread_rwlock_wrlock(lock);
 
-    nns.ids.erase(nns.nodes.front().id);
-    nns.ids.insert(u);
-
-    std::pop_heap(nns.nodes.begin(), nns.nodes.end());
-    nns.nodes.back() = Neighbor{u, l, true};
-    std::push_heap(nns.nodes.begin(), nns.nodes.end());
+    std::pop_heap(nns.begin(), nns.end());
+    nns.back() = Neighbor{u, l, true};
+    std::push_heap(nns.begin(), nns.end());
 
     pthread_rwlock_unlock(lock);
 
@@ -101,7 +96,7 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
 #pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
-            for (auto &node : nng[v].nodes) {
+            for (auto &node : nng[v]) {
                 if (node.updated) {
                     pthread_rwlock_wrlock(&locks[v]);
                     new_nns[v].insert(node.id);
@@ -188,11 +183,11 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
         timer_phase2.stop();
         timer_phase2_total.stop();
 
-        std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
-                  << std::endl;
-        std::cerr << "\tPhase 1: " << timer_phase1.elapsed() << " [ms], "
-                  << "Phase 2: " << timer_phase2.elapsed() << " [ms]"
-                  << std::endl;
+        // std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
+        //           << std::endl;
+        // std::cerr << "\tPhase 1: " << timer_phase1.elapsed() << " [ms], "
+        //           << "Phase 2: " << timer_phase2.elapsed() << " [ms]"
+        //           << std::endl;
 
         if (c <= DELTA * N * K) break;
     }
@@ -235,7 +230,7 @@ void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
 
         std::unordered_set<size_t> set;
         for (size_t k = 0; k < K; k++) {
-            set.insert(nng[i].nodes[k].id);
+            set.insert(nng[i][k].id);
         }
 
         for (size_t k = 0; k < K; k++) {
@@ -267,8 +262,7 @@ int main()
         for (size_t j = 0; j < K; j++) {
             size_t id = dist2(engine);
             float distance = std::numeric_limits<float>::max();
-            nng[i].nodes.push_back(Neighbor{id, distance, true});
-            nng[i].ids.insert(id);
+            nng[i].push_back(Neighbor{id, distance, true});
         }
     }
 
