@@ -17,6 +17,7 @@
 const size_t N = 1000000;
 const size_t K = 20;
 const float DELTA = 0.001f;
+const float MAX_ITER = 3;
 
 struct Neighbor {
     size_t id;
@@ -92,7 +93,7 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
     timer_total.start();
 
-    for (int iter = 0;; iter++) {
+    for (int iter = 0; iter < MAX_ITER; iter++) {
         Timer timer_phase0, timer_phase1, timer_phase2, timer_phase3;
 
         timer_phase0_total.start();
