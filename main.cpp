@@ -29,8 +29,44 @@ struct Neighbor {
     }
 };
 
-using NeighborList = std::vector<Neighbor>;
-using NNGraph = std::vector<NeighborList>;
+struct NNGraph {
+    int n;
+    std::vector<Neighbor> nns;
+
+    NNGraph(size_t n) : n(n), nns(K * n) {}
+
+    size_t size() const {
+        return n;
+    }
+
+    // v: this node, u: potential neighbor, l: distance between u and v
+    bool insert_neighbor(size_t v, float l, size_t u)
+    {
+        if (l >= nns[K * v].distance) {
+            return false;
+        }
+
+        for (size_t i = K * v; i < K * (v + 1); i++) {
+            if (u == nns[i].id) {
+                return false;
+            }
+        }
+
+        std::pop_heap(nns.begin() + K * v, nns.begin() + K * (v + 1));
+        nns[K * (v + 1) - 1] = Neighbor{u, l, true};
+        std::push_heap(nns.begin() + K * v, nns.begin() + K * (v + 1));
+
+        return true;
+    }
+
+    const Neighbor& kth_neighbor(size_t v, size_t k) const {
+        return nns[K * v + k];
+    }
+
+    Neighbor& kth_neighbor(size_t v, size_t k) {
+        return nns[K * v + k];
+    }
+};
 
 float sigma(const std::vector<float> &u, const std::vector<float> &v)
 {
@@ -45,43 +81,31 @@ float sigma(const std::vector<float> &u, const std::vector<float> &v)
     return sum;
 }
 
-bool update_nns(NeighborList &nns, float l, size_t u)
-{
-    if (l >= nns.front().distance) {
-        return false;
-    }
-
-    for (const auto &v : nns) {
-        if (u == v.id) {
-            return false;
-        }
-    }
-
-    std::pop_heap(nns.begin(), nns.end());
-    nns.back() = Neighbor{u, l, true};
-    std::push_heap(nns.begin(), nns.end());
-
-    return true;
-}
-
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
-    std::vector<NNGraph> local_nng(omp_get_max_threads(), nng);
+    std::vector<NNGraph> local_nng(omp_get_max_threads(), nng.size());
     std::vector<tbb::concurrent_unordered_set<size_t>> old_nns(nng.size()),
         new_nns(nng.size());
 
-    Timer timer_total, timer_phase1_total, timer_phase2_total;
+    Timer timer_total, timer_phase0_total, timer_phase1_total,
+          timer_phase2_total, timer_phase3_total;
 
     timer_total.start();
 
     for (int iter = 0;; iter++) {
-        Timer timer_phase1, timer_phase2, timer_phase3;
+        Timer timer_phase0, timer_phase1, timer_phase2, timer_phase3;
+
+        timer_phase0_total.start();
+        timer_phase0.start();
 
 #pragma omp parallel
         {
             int tid = omp_get_thread_num();
             local_nng[tid] = nng;
         }
+
+        timer_phase0.stop();
+        timer_phase0_total.stop();
 
         timer_phase1_total.start();
         timer_phase1.start();
@@ -94,7 +118,9 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
 #pragma omp parallel for
         for (size_t v = 0; v < nng.size(); v++) {
-            for (auto &node : nng[v]) {
+            for (size_t k = 0; k < K; k++) {
+                Neighbor& node = nng.kth_neighbor(v, k);
+
                 if (node.updated) {
                     new_nns[v].insert(node.id);
                     new_nns[node.id].insert(v);
@@ -134,8 +160,8 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
                         }
                     }
 
-                    update_nns(local_nng[tid][u1], min_dist, min_id);
-                    update_nns(local_nng[tid][min_id], min_dist, u1);
+                    local_nng[tid].insert_neighbor(u1, min_dist, min_id);
+                    local_nng[tid].insert_neighbor(min_id, min_dist, u1);
                 }
 
                 for (const auto u1 : new_nns[v]) {
@@ -153,8 +179,8 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
                         }
                     }
 
-                    update_nns(local_nng[tid][u1], min_dist, min_id);
-                    update_nns(local_nng[tid][min_id], min_dist, u1);
+                    local_nng[tid].insert_neighbor(u1, min_dist, min_id);
+                    local_nng[tid].insert_neighbor(min_id, min_dist, u1);
                 }
             }
         }
@@ -164,31 +190,26 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         int c = 0;
 
+        timer_phase3_total.start();
         timer_phase3.start();
 #pragma omp parallel for reduction(+:c)
         for (size_t v = 0; v < nng.size(); v++) {
             for (size_t tid = 0; tid < local_nng.size(); tid++) {
-                for (size_t i = 0; i < local_nng[tid][v].size(); i++) {
-                    const auto& new_nn = local_nng[tid][v][i];
-                    auto& nns = nng[v];
-
-                    if (new_nn.distance >= nns.front().distance) {
-                        continue;
+                for (size_t k = 0; k < K; k++) {
+                    const auto& new_nn = local_nng[tid].kth_neighbor(v, k);
+                    if (nng.insert_neighbor(v, new_nn.distance, new_nn.id)) {
+                        c++;
                     }
-
-                    std::pop_heap(nns.begin(), nns.end());
-                    nns.back() = new_nn;
-                    std::push_heap(nns.begin(), nns.end());
-
-                    c++;
                 }
             }
         }
         timer_phase3.stop();
+        timer_phase3_total.stop();
 
         std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
                   << std::endl;
-        std::cerr << "\tPhase 1: " << timer_phase1.elapsed() << " [ms], "
+        std::cerr << "\tPhase 0: " << timer_phase0.elapsed() << " [ms], "
+                  << "Phase 1: " << timer_phase1.elapsed() << " [ms], "
                   << "Phase 2: " << timer_phase2.elapsed() << " [ms], "
                   << "Phase 3: " << timer_phase3.elapsed() << " [ms]"
                   << std::endl;
@@ -199,8 +220,10 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
     timer_total.stop();
 
     std::cerr << "Total: " << timer_total.elapsed() << " [ms]" << std::endl;
-    std::cerr << "\tPhase 1: " << timer_phase1_total.elapsed() << " [ms], "
-              << "Phase 2: " << timer_phase2_total.elapsed() << " [ms]"
+    std::cerr << "\tPhase 0: " << timer_phase0_total.elapsed() << " [ms], "
+              << "Phase 1: " << timer_phase1_total.elapsed() << " [ms], "
+              << "Phase 2: " << timer_phase2_total.elapsed() << " [ms], "
+              << "Phase 3: " << timer_phase3_total.elapsed() << " [ms]"
               << std::endl;
 }
 
@@ -230,7 +253,7 @@ void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
 
         std::unordered_set<size_t> set;
         for (size_t k = 0; k < K; k++) {
-            set.insert(nng[i][k].id);
+            set.insert(nng.kth_neighbor(i, k).id);
         }
 
         for (size_t k = 0; k < K; k++) {
@@ -260,10 +283,12 @@ int main()
         data[i].push_back(dist(engine));
 
         // Randomly initialize neighbors
-        for (size_t j = 0; j < K; j++) {
-            size_t id = dist2(engine);
-            float distance = std::numeric_limits<float>::max();
-            nng[i].push_back(Neighbor{id, distance, true});
+        for (size_t k = 0; k < K; k++) {
+            auto& node = nng.kth_neighbor(i, k);
+
+            node.id = dist2(engine);
+            node.distance = std::numeric_limits<float>::max();
+            node.updated = true;
         }
     }
 
