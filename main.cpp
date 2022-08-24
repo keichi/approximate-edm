@@ -120,7 +120,7 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 
         auto c = 0;
 
-#pragma omp parallel for
+#pragma omp parallel for reduction(+:c)
         for (size_t v = 0; v < nng.size(); v++) {
             for (const auto u1 : new_nns[v]) {
                 float min_dist = std::numeric_limits<float>::max();
@@ -138,11 +138,9 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
                 }
 
                 if (update_nns(nng[u1], min_dist, min_id, &locks[u1])) {
-#pragma omp atomic update
                     c++;
                 }
                 if (update_nns(nng[min_id], min_dist, u1, &locks[min_id])) {
-#pragma omp atomic update
                     c++;
                 }
             }
@@ -163,11 +161,9 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
                 }
 
                 if (update_nns(nng[u1], min_dist, min_id, &locks[u1])) {
-#pragma omp atomic update
                     c++;
                 }
                 if (update_nns(nng[min_id], min_dist, u1, &locks[min_id])) {
-#pragma omp atomic update
                     c++;
                 }
             }
@@ -252,6 +248,7 @@ int main()
         data[i].push_back(dist(engine));
         data[i].push_back(dist(engine));
 
+        // Randomly initialize neighbors
         for (size_t j = 0; j < K; j++) {
             size_t id = dist2(engine);
             float distance = std::numeric_limits<float>::max();
