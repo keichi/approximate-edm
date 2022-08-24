@@ -277,31 +277,39 @@ void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
 
     size_t tp = 0;
 
-    for (size_t i = 0; i < data.size(); i++) {
-        std::fill(distances.begin(), distances.end(), 0.0f);
-        std::iota(indices.begin(), indices.end(), 0);
-
-        distances[i] = std::numeric_limits<float>::max();
-
-        for (size_t j = 0; j < data.size(); j++) {
-            for (size_t k = 0; k < data[j].size(); k++) {
-                float diff = data[i][k] - data[j][k];
-                distances[j] += diff * diff;
-            }
-        }
-
-        std::partial_sort(
-            indices.begin(), indices.begin() + K, indices.end(),
-            [&](size_t a, size_t b) { return distances[a] < distances[b]; });
-
+#pragma omp parallel
+    {
+        std::vector<float> distances(data.size());
+        std::vector<size_t> indices(data.size());
         std::unordered_set<size_t> set;
-        for (size_t k = 0; k < K; k++) {
-            set.insert(nng.kth_neighbor(i, k).id);
-        }
 
-        for (size_t k = 0; k < K; k++) {
-            if (set.find(indices[k]) != set.end()) {
-                tp++;
+#pragma omp for reduction(+:tp)
+        for (size_t i = 0; i < data.size(); i++) {
+            std::fill(distances.begin(), distances.end(), 0.0f);
+            std::iota(indices.begin(), indices.end(), 0);
+            set.clear();
+
+            distances[i] = std::numeric_limits<float>::max();
+
+            for (size_t j = 0; j < data.size(); j++) {
+                for (size_t k = 0; k < data[j].size(); k++) {
+                    float diff = data[i][k] - data[j][k];
+                    distances[j] += diff * diff;
+                }
+            }
+
+            std::partial_sort(
+                indices.begin(), indices.begin() + K, indices.end(),
+                [&](size_t a, size_t b) { return distances[a] < distances[b]; });
+
+            for (size_t k = 0; k < K; k++) {
+                set.insert(nng.kth_neighbor(i, k).id);
+            }
+
+            for (size_t k = 0; k < K; k++) {
+                if (set.find(indices[k]) != set.end()) {
+                    tp++;
+                }
             }
         }
     }
@@ -335,11 +343,15 @@ int main()
         }
     }
 
+    std::cerr << "NN-Descent" << std::endl;
     nn_descent(data, nng);
-    // eval_nng(data, nng);
+
+    eval_nng(data, nng);
+
     std::cerr << "Bruteforce" << std::endl;
     bruteforce(data, nng);
 
+    eval_nng(data, nng);
     // std::cout << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
     // "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
     // << std::endl;
