@@ -69,7 +69,7 @@ struct NNGraph {
     }
 };
 
-float sigma(const std::vector<float> &u, const std::vector<float> &v)
+inline float sigma(const std::vector<float> &u, const std::vector<float> &v)
 {
     float sum = 0.0f;
 
@@ -253,10 +253,7 @@ void bruteforce(const std::vector<std::vector<float>> &data, NNGraph &nng)
             distances[i] = std::numeric_limits<float>::max();
 
             for (size_t j = 0; j < data.size(); j++) {
-                for (size_t k = 0; k < data[j].size(); k++) {
-                    float diff = data[i][k] - data[j][k];
-                    distances[j] += diff * diff;
-                }
+                distances[j] = sigma(data[i], data[j]);
             }
 
             std::partial_sort(
@@ -298,10 +295,7 @@ void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
             distances[i] = std::numeric_limits<float>::max();
 
             for (size_t j = 0; j < data.size(); j++) {
-                for (size_t k = 0; k < data[j].size(); k++) {
-                    float diff = data[i][k] - data[j][k];
-                    distances[j] += diff * diff;
-                }
+                distances[j] = sigma(data[i], data[j]);
             }
 
             std::partial_sort(
