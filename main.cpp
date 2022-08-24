@@ -10,7 +10,6 @@
 #include <vector>
 
 #include <omp.h>
-#include <pthread.h>
 #include <tbb/concurrent_unordered_set.h>
 
 #include "timer.hpp"
@@ -46,38 +45,28 @@ float sigma(const std::vector<float> &u, const std::vector<float> &v)
     return sum;
 }
 
-bool update_nns(NeighborList &nns, float l, size_t u, pthread_rwlock_t *lock)
+bool update_nns(NeighborList &nns, float l, size_t u)
 {
-    pthread_rwlock_rdlock(lock);
-
     if (l >= nns.front().distance) {
-        pthread_rwlock_unlock(lock);
         return false;
     }
 
     for (const auto &v : nns) {
         if (u == v.id) {
-            pthread_rwlock_unlock(lock);
             return false;
         }
     }
 
-    pthread_rwlock_unlock(lock);
-
-    pthread_rwlock_wrlock(lock);
-
     std::pop_heap(nns.begin(), nns.end());
     nns.back() = Neighbor{u, l, true};
     std::push_heap(nns.begin(), nns.end());
-
-    pthread_rwlock_unlock(lock);
 
     return true;
 }
 
 void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
 {
-    std::vector<pthread_rwlock_t> locks(nng.size(), PTHREAD_RWLOCK_INITIALIZER);
+    std::vector<NNGraph> local_nng(omp_get_max_threads(), nng);
     std::vector<tbb::concurrent_unordered_set<size_t>> old_nns(nng.size()),
         new_nns(nng.size());
 
@@ -86,7 +75,13 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
     timer_total.start();
 
     for (int iter = 0;; iter++) {
-        Timer timer_phase1, timer_phase2;
+        Timer timer_phase1, timer_phase2, timer_phase3;
+
+#pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            local_nng[tid] = nng;
+        }
 
         timer_phase1_total.start();
         timer_phase1.start();
@@ -118,53 +113,48 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
         timer_phase2_total.start();
         timer_phase2.start();
 
-        auto c = 0;
+#pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
 
-#pragma omp parallel for reduction(+:c)
-        for (size_t v = 0; v < nng.size(); v++) {
-            for (const auto u1 : new_nns[v]) {
-                float min_dist = std::numeric_limits<float>::max();
-                size_t min_id = 0;
+#pragma omp for
+            for (size_t v = 0; v < nng.size(); v++) {
+                for (const auto u1 : new_nns[v]) {
+                    float min_dist = std::numeric_limits<float>::max();
+                    size_t min_id = 0;
 
-                for (const auto u2 : new_nns[v]) {
-                    if (u1 >= u2) continue;
+                    for (const auto u2 : new_nns[v]) {
+                        if (u1 >= u2) continue;
 
-                    float dist = sigma(data[u1], data[u2]);
+                        float dist = sigma(data[u1], data[u2]);
 
-                    if (dist < min_dist) {
-                        min_dist = dist;
-                        min_id = u2;
+                        if (dist < min_dist) {
+                            min_dist = dist;
+                            min_id = u2;
+                        }
                     }
+
+                    update_nns(local_nng[tid][u1], min_dist, min_id);
+                    update_nns(local_nng[tid][min_id], min_dist, u1);
                 }
 
-                if (update_nns(nng[u1], min_dist, min_id, &locks[u1])) {
-                    c++;
-                }
-                if (update_nns(nng[min_id], min_dist, u1, &locks[min_id])) {
-                    c++;
-                }
-            }
+                for (const auto u1 : new_nns[v]) {
+                    float min_dist = std::numeric_limits<float>::max();
+                    size_t min_id = 0;
 
-            for (const auto u1 : new_nns[v]) {
-                float min_dist = std::numeric_limits<float>::max();
-                size_t min_id = 0;
+                    for (const auto u2 : old_nns[v]) {
+                        if (u1 == u2) continue;
 
-                for (const auto u2 : old_nns[v]) {
-                    if (u1 == u2) continue;
+                        float dist = sigma(data[u1], data[u2]);
 
-                    float dist = sigma(data[u1], data[u2]);
-
-                    if (dist < min_dist) {
-                        min_dist = dist;
-                        min_id = u2;
+                        if (dist < min_dist) {
+                            min_dist = dist;
+                            min_id = u2;
+                        }
                     }
-                }
 
-                if (update_nns(nng[u1], min_dist, min_id, &locks[u1])) {
-                    c++;
-                }
-                if (update_nns(nng[min_id], min_dist, u1, &locks[min_id])) {
-                    c++;
+                    update_nns(local_nng[tid][u1], min_dist, min_id);
+                    update_nns(local_nng[tid][min_id], min_dist, u1);
                 }
             }
         }
@@ -172,11 +162,36 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
         timer_phase2.stop();
         timer_phase2_total.stop();
 
-        // std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
-        //           << std::endl;
-        // std::cerr << "\tPhase 1: " << timer_phase1.elapsed() << " [ms], "
-        //           << "Phase 2: " << timer_phase2.elapsed() << " [ms]"
-        //           << std::endl;
+        int c = 0;
+
+        timer_phase3.start();
+#pragma omp parallel for reduction(+:c)
+        for (size_t v = 0; v < nng.size(); v++) {
+            for (size_t tid = 0; tid < local_nng.size(); tid++) {
+                for (size_t i = 0; i < local_nng[tid][v].size(); i++) {
+                    const auto& new_nn = local_nng[tid][v][i];
+                    auto& nns = nng[v];
+
+                    if (new_nn.distance >= nns.front().distance) {
+                        continue;
+                    }
+
+                    std::pop_heap(nns.begin(), nns.end());
+                    nns.back() = new_nn;
+                    std::push_heap(nns.begin(), nns.end());
+
+                    c++;
+                }
+            }
+        }
+        timer_phase3.stop();
+
+        std::cerr << "Iteration #" << iter << ": updated " << c << " neighbors"
+                  << std::endl;
+        std::cerr << "\tPhase 1: " << timer_phase1.elapsed() << " [ms], "
+                  << "Phase 2: " << timer_phase2.elapsed() << " [ms], "
+                  << "Phase 3: " << timer_phase3.elapsed() << " [ms]"
+                  << std::endl;
 
         if (c <= DELTA * N * K) break;
     }
@@ -187,10 +202,6 @@ void nn_descent(const std::vector<std::vector<float>> &data, NNGraph &nng)
     std::cerr << "\tPhase 1: " << timer_phase1_total.elapsed() << " [ms], "
               << "Phase 2: " << timer_phase2_total.elapsed() << " [ms]"
               << std::endl;
-
-    for (auto &lock : locks) {
-        pthread_rwlock_destroy(&lock);
-    }
 }
 
 void eval_nng(const std::vector<std::vector<float>> &data, const NNGraph &nng)
