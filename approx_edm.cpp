@@ -13,8 +13,14 @@
 #include <xtensor/xsort.hpp>
 #include <xtensor/xview.hpp>
 
-const int N = 1000;
-const float DT = 0.04f;
+#include <faiss/IndexFlat.h>
+#include <faiss/IndexHNSW.h>
+#include <faiss/IndexNNDescent.h>
+
+#include "timer.hpp"
+
+const int N = 100000;
+const float DT = 40.0f / N;
 const int E = 3;
 const int tau = 1;
 const int Tp = 1;
@@ -83,21 +89,41 @@ void simplex(const xt::xtensor<float, 1> &train,
             test, xt::range(i * tau, test.size() - (E - i - 1) * tau, tau));
     }
 
-    // Calculate pairwise distance matrix
-    xt::xtensor<float, 2> dmatrix =
-        xt::sum(xt::square(xt::expand_dims(test_embed, 1) -
-                           xt::expand_dims(
-                               xt::view(train_embed,
-                                        xt::range(0, train_embed.shape(0) - Tp),
-                                        xt::all()),
-                               0)),
-                2);
+    xt::xtensor<float, 2> dist =
+        xt::empty<float>({test_embed.shape(0), static_cast<size_t>(E + 1)});
+    xt::xtensor<faiss::Index::idx_t, 2> ind =
+        xt::empty<faiss::Index::idx_t>({test_embed.shape(0), static_cast<size_t>(E + 1)});
 
-    // Find k-nearest neighbors
-    auto ind =
-        xt::view(xt::argsort(dmatrix, 1), xt::all(), xt::range(0, E + 1));
-    auto dist = xt::sqrt(
-        xt::view(xt::sort(dmatrix, 1), xt::all(), xt::range(0, E + 1)));
+    Timer timer;
+
+    timer.start();
+
+    // faiss::IndexFlatL2 index(E);
+    // faiss::IndexHNSWFlat index(E, 4);
+    // faiss::IndexPQ index(E, 1, 8);
+    faiss::IndexNNDescentFlat index(E, E+1);
+    // index.train(train_embed.shape(0) - Tp, train_embed.data());
+    index.add(train_embed.shape(0) - Tp, train_embed.data());
+    index.search(test_embed.shape(0), test_embed.data(), E+1, dist.data(), ind.data());
+
+    timer.stop();
+    std::cout << "kNN search: " << timer.elapsed() << "[ms]" << std::endl;
+
+    // // Calculate pairwise distance matrix
+    // xt::xtensor<float, 2> dmatrix =
+    //     xt::sum(xt::square(xt::expand_dims(test_embed, 1) -
+    //                        xt::expand_dims(
+    //                            xt::view(train_embed,
+    //                                     xt::range(0, train_embed.shape(0) -
+    //                                     Tp), xt::all()),
+    //                            0)),
+    //             2);
+
+    // // Find k-nearest neighbors
+    // auto ind =
+    //     xt::view(xt::argsort(dmatrix, 1), xt::all(), xt::range(0, E + 1));
+    // auto dist = xt::sqrt(
+    //     xt::view(xt::sort(dmatrix, 1), xt::all(), xt::range(0, E + 1)));
 
     // Calculate weights from distances
     auto w = xt::exp(-dist / xt::expand_dims(xt::amin(dist, 1), 1));
@@ -117,6 +143,12 @@ void simplex(const xt::xtensor<float, 1> &train,
                           xt::sum(xt::square(actual - xt::mean(actual)))(0);
 
     std::cout << "R2: " << r2 << std::endl;
+
+    std::ofstream f1("pred.csv");
+    xt::dump_csv(f1, xt::expand_dims(pred, 1));
+
+    std::ofstream f2("test.csv");
+    xt::dump_csv(f2, xt::expand_dims(test, 1));
 }
 
 int main()
