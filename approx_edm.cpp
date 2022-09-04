@@ -16,6 +16,8 @@
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexNNDescent.h>
+#include <faiss/gpu/GpuIndexFlat.h>
+#include <faiss/gpu/StandardGpuResources.h>
 
 #include "timer.hpp"
 
@@ -91,8 +93,10 @@ void simplex(const xt::xtensor<float, 1> &train,
 
     xt::xtensor<float, 2> dist =
         xt::empty<float>({test_embed.shape(0), static_cast<size_t>(E + 1)});
-    xt::xtensor<faiss::Index::idx_t, 2> ind =
-        xt::empty<faiss::Index::idx_t>({test_embed.shape(0), static_cast<size_t>(E + 1)});
+    xt::xtensor<faiss::Index::idx_t, 2> ind = xt::empty<faiss::Index::idx_t>(
+        {test_embed.shape(0), static_cast<size_t>(E + 1)});
+
+    faiss::gpu::StandardGpuResources res; // use a single GPU
 
     Timer timer;
 
@@ -101,10 +105,12 @@ void simplex(const xt::xtensor<float, 1> &train,
     // faiss::IndexFlatL2 index(E);
     // faiss::IndexHNSWFlat index(E, 4);
     // faiss::IndexPQ index(E, 1, 8);
-    faiss::IndexNNDescentFlat index(E, E+1);
+    // faiss::IndexNNDescentFlat index(E, E+1);
+    faiss::gpu::GpuIndexFlatL2 index(&res, E);
     // index.train(train_embed.shape(0) - Tp, train_embed.data());
     index.add(train_embed.shape(0) - Tp, train_embed.data());
-    index.search(test_embed.shape(0), test_embed.data(), E+1, dist.data(), ind.data());
+    index.search(test_embed.shape(0), test_embed.data(), E + 1, dist.data(),
+                 ind.data());
 
     timer.stop();
     std::cout << "kNN search: " << timer.elapsed() << "[ms]" << std::endl;
@@ -126,14 +132,17 @@ void simplex(const xt::xtensor<float, 1> &train,
     //     xt::view(xt::sort(dmatrix, 1), xt::all(), xt::range(0, E + 1)));
 
     // Calculate weights from distances
-    auto w = xt::exp(-dist / xt::expand_dims(xt::amin(dist, 1), 1));
-    auto w2 = w / xt::expand_dims(xt::sum(w, 1), 1);
+    auto min_dist = xt::amin(dist, 1);
+    auto w = xt::where(xt::expand_dims(min_dist > 0.0f, 1),
+                       xt::exp(-dist / xt::expand_dims(min_dist, 1)),
+                       xt::where(dist > 0.0f, 1.0f, 0.0f));
+    auto w2 = xt::maximum(w, 1e-6f);
+    auto w3 = w2 / xt::expand_dims(xt::sum(w2, 1), 1);
 
     xt::xtensor<float, 1> pred = xt::zeros<float>({ind.shape(0)});
-
     for (int i = 0; i < E + 1; i++) {
         pred += xt::index_view(train, xt::col(ind, i) + (E - 1) * tau + Tp) *
-                xt::col(w2, i);
+                xt::col(w3, i);
     }
 
     auto actual = xt::view(test, xt::range((E - 1) * tau + Tp, test.size()));

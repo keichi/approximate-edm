@@ -1,2 +1,2 @@
 CompileFlags:
-  Add: [-std=c++11, -Wall]
+  Add: [-std=c++14, -Wall, -I/usr/local/cuda/include]
