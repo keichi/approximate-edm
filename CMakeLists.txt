@@ -11,6 +11,9 @@ find_package(xtl REQUIRED)
 find_package(xtensor REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(faiss REQUIRED)
+find_package(nanoflann REQUIRED)
 
-target_link_libraries(approx-edm PRIVATE OpenMP::OpenMP_CXX xtl xtensor faiss CUDA::cublas)
-target_link_libraries(eval-hnsw-edm PRIVATE OpenMP::OpenMP_CXX xtl xtensor faiss CUDA::cublas)
+set(DEPS OpenMP::OpenMP_CXX xtl xtensor faiss CUDA::cublas nanoflann::nanoflann)
+
+target_link_libraries(approx-edm PRIVATE ${DEPS})
+target_link_libraries(eval-hnsw-edm PRIVATE ${DEPS})
