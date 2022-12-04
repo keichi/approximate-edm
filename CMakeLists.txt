@@ -17,3 +17,9 @@ set(DEPS OpenMP::OpenMP_CXX xtl xtensor faiss CUDA::cublas
 
 add_executable(eval-knn-runtime eval_knn_runtime.cpp)
 target_link_libraries(eval-knn-runtime PRIVATE ${DEPS})
+
+add_executable(eval-knn-recall eval_knn_recall.cpp)
+target_link_libraries(eval-knn-recall PRIVATE ${DEPS})
+
+add_executable(eval-simplex-mape eval_simplex_mape.cpp)
+target_link_libraries(eval-simplex-mape PRIVATE ${DEPS})

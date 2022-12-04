@@ -8,24 +8,13 @@
 #include <xtensor.hpp>
 
 #include "lorenz.hpp"
-#include "timer.hpp"
 
 const int tau = 1;
 const int Tp = 1;
 
-const int N_WARMUPS = 3;
-const int N_TRIALS = 10;
-
-struct Timers {
-    Timer total;
-    Timer train;
-    Timer index;
-    Timer search;
-};
-
-void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
-             const xt::xtensor<float, 1> &test, int E, Timers &timers,
-             bool measure_timings)
+void simplex(faiss::Index *flat_index, faiss::Index *index,
+             const xt::xtensor<float, 1> &train,
+             const xt::xtensor<float, 1> &test, int E)
 {
     xt::xtensor<float, 2> train_embed = xt::empty<float>(
         {train.shape(0) - (E - 1) * tau, static_cast<size_t>(E)});
@@ -40,44 +29,47 @@ void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
             test, xt::range(i * tau, test.size() - (E - i - 1) * tau, tau));
     }
 
+    xt::xtensor<float, 2> dist_gt =
+        xt::empty<float>({test_embed.shape(0), static_cast<size_t>(E + 1)});
+    xt::xtensor<faiss::Index::idx_t, 2> ind_gt = xt::empty<faiss::Index::idx_t>(
+        {test_embed.shape(0), static_cast<size_t>(E + 1)});
+
+    flat_index->train(train_embed.shape(0), train_embed.data());
+    flat_index->add(train_embed.shape(0) - Tp, train_embed.data());
+    flat_index->search(test_embed.shape(0), test_embed.data(), E + 1,
+                       dist_gt.data(), ind_gt.data());
+
     xt::xtensor<float, 2> dist =
         xt::empty<float>({test_embed.shape(0), static_cast<size_t>(E + 1)});
     xt::xtensor<faiss::Index::idx_t, 2> ind = xt::empty<faiss::Index::idx_t>(
         {test_embed.shape(0), static_cast<size_t>(E + 1)});
 
-    if (measure_timings) {
-        timers.total.start();
-        timers.train.start();
-    }
-
     index->train(train_embed.shape(0), train_embed.data());
-
-    if (measure_timings) {
-        timers.train.stop();
-        timers.index.start();
-    }
-
     index->add(train_embed.shape(0) - Tp, train_embed.data());
-
-    if (measure_timings) {
-        timers.index.stop();
-        timers.search.start();
-    }
-
     index->search(test_embed.shape(0), test_embed.data(), E + 1, dist.data(),
                   ind.data());
 
-    if (measure_timings) {
-        timers.search.stop();
-        timers.total.stop();
+    int correct = 0;
+
+    for (int i = 0; i < ind_gt.shape(0); i++) {
+        for (int j = 0; j < ind_gt.shape(1); j++) {
+            for (int k = 0; k < ind.shape(1); k++) {
+                if (ind_gt(i, j) == ind(i, k)) {
+                    correct++;
+                    break;
+                }
+            }
+        }
     }
+
+    std::cout << std::fixed << std::setprecision(5)
+              << static_cast<float>(correct) / ind_gt.size() << std::endl;
 }
 
 int main(int argc, char *argv[])
 {
-    cxxopts::Options options(
-        "eval-knn-runtime",
-        "Compare runtime of Simplex projection across AkNN algorithms");
+    cxxopts::Options options("eval-knn-recall",
+                             "Compare recall of AkNN algorithms");
 
     // clang-format off
     options.add_options()
@@ -106,15 +98,13 @@ int main(int argc, char *argv[])
     std::cout << std::boolalpha
               << "Index: " << result["index"].as<std::string>()
               << ", GPU: " << result["gpu"].as<bool>() << std::endl;
-    std::cout << "E\tN\ttotal\ttrain\tindex\tsearch" << std::endl;
+    std::cout << "E\tN\trecall" << std::endl;
 
     for (int E : result["embedding-dims"].as<std::vector<int>>()) {
         int start = result["log2-min-n"].as<int>();
         int end = result["log2-max-n"].as<int>();
 
         for (int N = 1 << start; N <= 1 << end; N <<= 1) {
-            Timers timers;
-
             std::cout << E << "\t" << N << "\t";
 
             xt::xtensor<float, 1> ts = xt::empty<float>({N});
@@ -124,22 +114,17 @@ int main(int argc, char *argv[])
             auto train = xt::view(ts, xt::range(0, ts.size() / 2));
             auto test = xt::view(ts, xt::range(ts.size() / 2, ts.size()));
 
-            for (int i = 0; i < N_WARMUPS + N_TRIALS; i++) {
-                faiss::Index *index = faiss::index_factory(
-                    E, result["index"].as<std::string>().c_str());
+            faiss::Index *flat_index = faiss::index_factory(E, "Flat");
+            flat_index = faiss::gpu::index_cpu_to_gpu(&res, 0, flat_index);
 
-                if (result.count("gpu")) {
-                    index = faiss::gpu::index_cpu_to_gpu(&res, 0, index);
-                }
+            faiss::Index *index = faiss::index_factory(
+                E, result["index"].as<std::string>().c_str());
 
-                simplex(index, train, test, E, timers, i >= N_WARMUPS);
+            if (result.count("gpu")) {
+                index = faiss::gpu::index_cpu_to_gpu(&res, 0, index);
             }
 
-            std::cout << std::fixed << std::setprecision(2)
-                      << timers.total.elapsed() / N_TRIALS << "\t"
-                      << timers.train.elapsed() / N_TRIALS << "\t"
-                      << timers.index.elapsed() / N_TRIALS << "\t"
-                      << timers.search.elapsed() / N_TRIALS << std::endl;
+            simplex(flat_index, index, train, test, E);
         }
     }
 
