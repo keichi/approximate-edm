@@ -1,5 +1,4 @@
-#ifndef __TIMER_HPP__
-#define __TIMER_HPP__
+#pragma one
 
 #include <chrono>
 
@@ -50,5 +49,3 @@ public:
 
     double elapsed() const { return _to_millis(_total); }
 };
-
-#endif
