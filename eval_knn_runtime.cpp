@@ -2,9 +2,11 @@
 #include <iostream>
 #include <vector>
 
-#include <xtensor.hpp>
-
+#include <cxxopts.hpp>
+#include <faiss/gpu/GpuCloner.h>
+#include <faiss/gpu/StandardGpuResources.h>
 #include <faiss/index_factory.h>
+#include <xtensor.hpp>
 
 #include "lorenz.hpp"
 #include "timer.hpp"
@@ -74,12 +76,41 @@ void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
 
 int main(int argc, char *argv[])
 {
-    std::cout << "Index: " << argv[1] << std::endl;
+    cxxopts::Options options(
+        "eval-knn-runtime",
+        "Compare runtime of Simplex projection across AkNN algorithms");
+
+    // clang-format off
+    options.add_options()
+        ("h,help", "Print usage")
+        ("g,gpu", "Use GPU if index is supported")
+        ("e,embedding-dims", "Embedding dimensions",
+         cxxopts::value<std::vector<int>>()->default_value("1,5,10,20"))
+        ("log2-min-n", "log2(minimum time series length)",
+         cxxopts::value<int>()->default_value("10"))
+        ("log2-max-n", "log2(maximum time series length)",
+         cxxopts::value<int>()->default_value("20"))
+        ("i,index", "Index factory string", cxxopts::value<std::string>());
+    // clang-format on
+
+    options.parse_positional({"index"});
+
+    auto result = options.parse(argc, argv);
+
+    if (result.count("help")) {
+        std::cout << options.help() << std::endl;
+        return 0;
+    }
+
+    faiss::gpu::StandardGpuResources res;
+
+    std::cout << "Index: " << result["index"].as<std::string>()
+              << ", GPU: " << result.count("gpu") << std::endl;
     std::cout << "E\tN\ttotal\ttrain\tindex\tsearch" << std::endl;
 
-    for (int E : std::vector<int>({1, 5, 10, 20})) {
-        int start = std::stoi(argv[2]);
-        int end = std::stoi(argv[3]);
+    for (int E : result["embedding-dims"].as<std::vector<int>>()) {
+        int start = result["log2-min-n"].as<int>();
+        int end = result["log2-max-n"].as<int>();
 
         for (int N = 1 << start; N <= 1 << end; N <<= 1) {
             Timers timers;
@@ -95,6 +126,11 @@ int main(int argc, char *argv[])
 
             for (int i = 0; i < N_WARMUPS + N_TRIALS; i++) {
                 faiss::Index *index = faiss::index_factory(E, argv[1]);
+
+                if (result.count("gpu")) {
+                    index = faiss::gpu::index_cpu_to_gpu(&res, 0, index);
+                }
+
                 simplex(index, train, test, E, timers, i >= N_WARMUPS);
             }
 
