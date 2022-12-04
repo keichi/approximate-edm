@@ -90,10 +90,10 @@ int main(int argc, char *argv[])
          cxxopts::value<int>()->default_value("10"))
         ("log2-max-n", "log2(maximum time series length)",
          cxxopts::value<int>()->default_value("20"))
-        ("i,index", "Index factory string", cxxopts::value<std::string>());
+        ("index", "Index factory string", cxxopts::value<std::string>());
     // clang-format on
 
-    options.parse_positional({"index"});
+    options.parse_positional("index");
 
     auto result = options.parse(argc, argv);
 
@@ -104,8 +104,9 @@ int main(int argc, char *argv[])
 
     faiss::gpu::StandardGpuResources res;
 
-    std::cout << "Index: " << result["index"].as<std::string>()
-              << ", GPU: " << result.count("gpu") << std::endl;
+    std::cout << std::boolalpha
+              << "Index: " << result["index"].as<std::string>()
+              << ", GPU: " << result["gpu"].as<bool>() << std::endl;
     std::cout << "E\tN\ttotal\ttrain\tindex\tsearch" << std::endl;
 
     for (int E : result["embedding-dims"].as<std::vector<int>>()) {
@@ -125,7 +126,8 @@ int main(int argc, char *argv[])
             auto test = xt::view(ts, xt::range(ts.size() / 2, ts.size()));
 
             for (int i = 0; i < N_WARMUPS + N_TRIALS; i++) {
-                faiss::Index *index = faiss::index_factory(E, argv[1]);
+                faiss::Index *index = faiss::index_factory(
+                    E, result["index"].as<std::string>().c_str());
 
                 if (result.count("gpu")) {
                     index = faiss::gpu::index_cpu_to_gpu(&res, 0, index);
