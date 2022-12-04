@@ -4,11 +4,13 @@ project(approx-edm CXX)
 enable_language(CUDA)
 
 find_package(OpenMP REQUIRED)
-find_package(xtl REQUIRED)
-find_package(xtensor REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(faiss REQUIRED)
-find_package(nanoflann REQUIRED)
+
+add_subdirectory(thirdparty/cxxopts)
+add_subdirectory(thirdparty/xtl)
+add_subdirectory(thirdparty/xtensor)
+add_subdirectory(thirdparty/nanoflann)
 
 set(DEPS OpenMP::OpenMP_CXX xtl xtensor faiss CUDA::cublas nanoflann::nanoflann)
 

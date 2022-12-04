@@ -1,0 +1,15 @@
+[submodule "thirdparty."]
+	path = thirdparty.
+	url = https://github.com/jarro2783/cxxopts.git
+[submodule "thirdparty/cxxopts"]
+	path = thirdparty/cxxopts
+	url = https://github.com/jarro2783/cxxopts.git
+[submodule "thirdparty/xtensor"]
+	path = thirdparty/xtensor
+	url = https://github.com/xtensor-stack/xtensor.git
+[submodule "thirdparty/xtl"]
+	path = thirdparty/xtl
+	url = https://github.com/xtensor-stack/xtl.git
+[submodule "thirdparty/nanoflann"]
+	path = thirdparty/nanoflann
+	url = https://github.com/jlblancoc/nanoflann.git
