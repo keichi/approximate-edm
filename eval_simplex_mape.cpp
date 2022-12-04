@@ -5,6 +5,7 @@
 #include <cxxopts.hpp>
 #include <faiss/gpu/GpuCloner.h>
 #include <faiss/gpu/StandardGpuResources.h>
+#include <faiss/IndexHNSW.h>
 #include <faiss/index_factory.h>
 #include <xtensor.hpp>
 
@@ -63,8 +64,8 @@ void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
 
 int main(int argc, char *argv[])
 {
-    cxxopts::Options options("eval-knn-recall",
-                             "Compare recall of AkNN algorithms");
+    cxxopts::Options options("eval-simplex-mape",
+                             "Compare Simplex prediction accuracy across AkNN algorithms");
 
     // clang-format off
     options.add_options()
@@ -76,6 +77,10 @@ int main(int argc, char *argv[])
          cxxopts::value<int>()->default_value("10"))
         ("log2-max-n", "log2(maximum time series length)",
          cxxopts::value<int>()->default_value("20"))
+        ("efConstruction", "efConstruction parameter for HNSW Index",
+         cxxopts::value<int>()->default_value("40"))
+        ("efSearch", "efSearch parameter for HNSW Index",
+         cxxopts::value<int>()->default_value("16"))
         ("index", "Index factory string", cxxopts::value<std::string>());
     // clang-format on
 
@@ -111,6 +116,11 @@ int main(int argc, char *argv[])
 
             faiss::Index *index = faiss::index_factory(
                 E, result["index"].as<std::string>().c_str());
+
+            if (auto hnsw_index = dynamic_cast<faiss::IndexHNSW*>(index)) {
+                hnsw_index->hnsw.efSearch = result["efSearch"].as<int>();
+                hnsw_index->hnsw.efConstruction = result["efConstruction"].as<int>();
+            }
 
             if (result.count("gpu")) {
                 index = faiss::gpu::index_cpu_to_gpu(&res, 0, index);
