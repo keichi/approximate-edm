@@ -1,5 +1,8 @@
 #!/bin/bash
 
+export OMP_NUM_THREADS=64
+export OMP_PROC_BIND=close
+
 build/eval-knn-runtime Flat
 build/eval-knn-runtime IVF32,Flat
 build/eval-knn-runtime IVF64,Flat
