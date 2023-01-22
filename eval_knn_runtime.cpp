@@ -2,10 +2,11 @@
 #include <vector>
 
 #include <cxxopts.hpp>
+#include <faiss/IndexHNSW.h>
 #include <faiss/gpu/GpuCloner.h>
 #include <faiss/gpu/StandardGpuResources.h>
-#include <faiss/IndexHNSW.h>
 #include <faiss/index_factory.h>
+#include <nanoflann.hpp>
 #include <xtensor.hpp>
 
 #include "lorenz.hpp"
@@ -24,7 +25,24 @@ struct Timers {
     Timer search;
 };
 
-void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
+template <class T> class XtensorDataset
+{
+    const xt::xtensor<T, 2> &dataset;
+
+public:
+    XtensorDataset(const xt::xtensor<T, 2> &dataset) : dataset(dataset) {}
+
+    inline size_t kdtree_get_point_count() const { return dataset.shape(0); }
+
+    inline T kdtree_get_pt(const size_t idx, int dim) const
+    {
+        return dataset(idx, dim);
+    }
+
+    template <class BBOX> bool kdtree_get_bbox(BBOX &bb) const { return false; }
+};
+
+void simplex(faiss::Index *_index, const xt::xtensor<float, 1> &train,
              const xt::xtensor<float, 1> &test, int E, Timers &timers,
              bool measure_timings)
 {
@@ -43,7 +61,7 @@ void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
 
     xt::xtensor<float, 2> dist =
         xt::empty<float>({test_embed.shape(0), static_cast<size_t>(E + 1)});
-    xt::xtensor<faiss::Index::idx_t, 2> ind = xt::empty<faiss::Index::idx_t>(
+    xt::xtensor<unsigned int, 2> ind = xt::empty<faiss::Index::idx_t>(
         {test_embed.shape(0), static_cast<size_t>(E + 1)});
 
     if (measure_timings) {
@@ -51,22 +69,31 @@ void simplex(faiss::Index *index, const xt::xtensor<float, 1> &train,
         timers.train.start();
     }
 
-    index->train(train_embed.shape(0), train_embed.data());
-
     if (measure_timings) {
         timers.train.stop();
         timers.index.start();
     }
 
-    index->add(train_embed.shape(0) - Tp, train_embed.data());
+    XtensorDataset<float> dataset(train_embed);
+    nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<float, XtensorDataset<float>>,
+        XtensorDataset<float>>
+        index(E, dataset);
+    index.buildIndex();
 
     if (measure_timings) {
         timers.index.stop();
         timers.search.start();
     }
 
-    index->search(test_embed.shape(0), test_embed.data(), E + 1, dist.data(),
-                  ind.data());
+#pragma omp parallel for
+    for (int i = 0; i < test_embed.shape(0); i++) {
+        index.knnSearch(
+            xt::row(test_embed, i).data() +
+                xt::row(test_embed, i).data_offset(),
+            E + 1, xt::row(ind, i).data() + xt::row(ind, i).data_offset(),
+            xt::row(dist, i).data() + xt::row(dist, i).data_offset());
+    }
 
     if (measure_timings) {
         timers.search.stop();
@@ -130,17 +157,7 @@ int main(int argc, char *argv[])
             auto test = xt::view(ts, xt::range(ts.size() / 2, ts.size()));
 
             for (int i = 0; i < N_WARMUPS + N_TRIALS; i++) {
-                faiss::Index *index = faiss::index_factory(
-                    E, result["index"].as<std::string>().c_str());
-
-                if (auto hnsw_index = dynamic_cast<faiss::IndexHNSW*>(index)) {
-                    hnsw_index->hnsw.efSearch = result["efSearch"].as<int>();
-                    hnsw_index->hnsw.efConstruction = result["efConstruction"].as<int>();
-                }
-
-                if (result.count("gpu")) {
-                    index = faiss::gpu::index_cpu_to_gpu(&res, 0, index);
-                }
+                faiss::Index *index = nullptr;
 
                 simplex(index, train, test, E, timers, i >= N_WARMUPS);
             }
